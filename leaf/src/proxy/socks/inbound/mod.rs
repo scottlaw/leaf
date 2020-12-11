@@ -1,6 +1,8 @@
 mod tcp;
 mod udp;
 
+pub use tcp::Handler as TcpHandler;
+
 use std::sync::Arc;
 
 use anyhow::anyhow;

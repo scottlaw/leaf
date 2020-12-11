@@ -19,8 +19,8 @@ use crate::proxy::tun;
 
 use crate::{
     app::{
-        dispatcher::Dispatcher, handler_manager::HandlerManager, nat_manager::NatManager,
-        router::Router,
+        dispatcher::Dispatcher, handler_manager::HandlerManager, inbound_manager::InboundManager,
+        nat_manager::NatManager, router::Router,
     },
     config::Config,
     session::{Session, SocksAddr},
@@ -32,38 +32,43 @@ pub fn create_runners(config: Config) -> Result<Vec<Runner>> {
     let router = Router::new(&config.routing_rules);
     let dispatcher = Arc::new(Dispatcher::new(handler_manager, router));
     let nat_manager = Arc::new(NatManager::new(dispatcher.clone()));
-    let mut runners: Vec<Runner> = Vec::new();
-    for inbound in config.inbounds.into_iter() {
-        match inbound.protocol.as_str() {
-            #[cfg(feature = "inbound-http")]
-            "http" => {
-                if let Ok(r) = http::inbound::new(inbound, dispatcher.clone()) {
-                    runners.push(r);
-                }
-            }
-            #[cfg(feature = "inbound-socks")]
-            "socks" => {
-                if let Ok(r) =
-                    socks::inbound::new(&inbound, dispatcher.clone(), nat_manager.clone())
-                {
-                    runners.push(r);
-                }
-            }
-            #[cfg(all(
-                feature = "inbound-tun",
-                any(target_os = "ios", target_os = "macos", target_os = "linux")
-            ))]
-            "tun" => {
-                if let Ok(r) = tun::inbound::new(inbound, dispatcher.clone(), nat_manager.clone()) {
-                    runners.push(Box::pin(r));
-                }
-            }
-            _ => {
-                warn!("unknown protocol {:?}", inbound.protocol);
-            }
-        }
-    }
-    Ok(runners)
+
+    let inbound_manager = InboundManager::new(dispatcher.clone());
+    let runners = inbound_manager.get_runners();
+    return Ok(runners);
+
+    // let mut runners: Vec<Runner> = Vec::new();
+    // for inbound in config.inbounds.into_iter() {
+    //     match inbound.protocol.as_str() {
+    //         #[cfg(feature = "inbound-http")]
+    //         "http" => {
+    //             if let Ok(r) = http::inbound::new(inbound, dispatcher.clone()) {
+    //                 runners.push(r);
+    //             }
+    //         }
+    //         #[cfg(feature = "inbound-socks")]
+    //         "socks" => {
+    //             if let Ok(r) =
+    //                 socks::inbound::new(&inbound, dispatcher.clone(), nat_manager.clone())
+    //             {
+    //                 runners.push(r);
+    //             }
+    //         }
+    //         #[cfg(all(
+    //             feature = "inbound-tun",
+    //             any(target_os = "ios", target_os = "macos", target_os = "linux")
+    //         ))]
+    //         "tun" => {
+    //             if let Ok(r) = tun::inbound::new(inbound, dispatcher.clone(), nat_manager.clone()) {
+    //                 runners.push(Box::pin(r));
+    //             }
+    //         }
+    //         _ => {
+    //             warn!("unknown protocol {:?}", inbound.protocol);
+    //         }
+    //     }
+    // }
+    // Ok(runners)
 }
 
 pub fn run_with_config(config: Config) -> Result<()> {

@@ -10,6 +10,11 @@ use bytes::BufMut;
 use log::*;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+pub struct InboundSession {
+    pub source: Option<SocketAddr>,
+    pub destination: Option<SocksAddr>,
+}
+
 pub struct Session {
     pub source: SocketAddr,
     pub destination: SocksAddr,

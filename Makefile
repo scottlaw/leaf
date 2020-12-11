@@ -10,7 +10,7 @@ local:
 	cargo build -p leaf-bin --release
 
 local-dev:
-	cargo build -p leaf-bin
+	cargo build --manifest-path leaf-bin/Cargo.toml --no-default-features --features "leaf/config-json leaf/inbound-socks leaf/outbound-direct"
 
 # Force a re-generation of protobuf files.
 proto-gen:

@@ -9,10 +9,15 @@ use socket2::{Domain, Socket, Type};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
-use crate::{common::dns_client::DnsClient, common::resolver::Resolver, session::Session};
+use crate::{
+    common::dns_client::DnsClient,
+    common::resolver::Resolver,
+    session::{InboundSession, Session},
+};
 
 pub mod datagram;
 pub mod handler;
+pub mod inbound;
 pub mod stream;
 
 #[cfg(feature = "inbound-http")]
@@ -227,4 +232,14 @@ pub trait ProxyUdpHandler: Send + Sync + Unpin {
     ) -> io::Result<Box<dyn ProxyStream>> {
         dial_tcp_stream(dns_client, bind_addr, address, port).await
     }
+}
+
+pub trait InboundHandler: TcpInboundHandler + Send + Unpin {}
+
+#[async_trait]
+pub trait TcpInboundHandler: Send + Sync + Unpin {
+    async fn handle_inbound_tcp<'a>(
+        &'a self,
+        sess: Option<(Box<dyn ProxyStream>, InboundSession)>,
+    ) -> io::Result<(Box<dyn ProxyStream>, InboundSession)>;
 }
