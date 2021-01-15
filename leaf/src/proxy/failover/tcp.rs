@@ -4,20 +4,22 @@ use std::{io, sync::Arc, time};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use log::*;
+use lru_time_cache::LruCache;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::timeout;
 
 use crate::{
-    proxy::{ProxyHandler, ProxyStream, ProxyTcpHandler},
+    proxy::{OutboundConnect, OutboundHandler, ProxyStream, TcpOutboundHandler},
     session::{Session, SocksAddr},
 };
 
 pub struct Handler {
-    pub actors: Vec<Arc<dyn ProxyHandler>>,
+    pub actors: Vec<Arc<dyn OutboundHandler>>,
     pub fail_timeout: u32,
     pub schedule: Arc<TokioMutex<Vec<usize>>>,
     pub health_check_task: TokioMutex<Option<BoxFuture<'static, ()>>>,
+    pub cache: Option<Arc<TokioMutex<LruCache<String, usize>>>>,
 }
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -25,11 +27,14 @@ struct Measure(usize, u128); // (index, duration in millis)
 
 impl Handler {
     pub fn new(
-        actors: Vec<Arc<dyn ProxyHandler>>,
-        fail_timeout: u32,
+        actors: Vec<Arc<dyn OutboundHandler>>,
+        fail_timeout: u32, // in secs
         health_check: bool,
-        check_interval: u32,
+        check_interval: u32, // in secs
         failover: bool,
+        fallback_cache: bool,
+        cache_size: usize,
+        cache_timeout: u64, // in minutes
     ) -> Self {
         let mut schedule = Vec::new();
         for i in 0..actors.len() {
@@ -48,10 +53,12 @@ impl Handler {
                         let single_measure = async move {
                             let sess = Session {
                                 source: "0.0.0.0:0".parse().unwrap(),
+                                local_addr: "0.0.0.0:0".parse().unwrap(),
                                 destination: SocksAddr::Domain("www.google.com".to_string(), 80),
+                                inbound_tag: "".to_string(),
                             };
                             let start = tokio::time::Instant::now();
-                            match a.handle(&sess, None).await {
+                            match a.handle_tcp(&sess, None).await {
                                 Ok(mut stream) => {
                                     if stream.write_all(b"HEAD / HTTP/1.1\r\n\r\n").await.is_err() {
                                         return Measure(i, u128::MAX - 2); // handshake is ok
@@ -125,26 +132,38 @@ impl Handler {
             None
         };
 
+        let cache = if fallback_cache {
+            Some(Arc::new(TokioMutex::new(
+                LruCache::with_expiry_duration_and_capacity(
+                    time::Duration::from_secs(cache_timeout * 60),
+                    cache_size,
+                ),
+            )))
+        } else {
+            None
+        };
+
         Handler {
             actors,
             fail_timeout,
             schedule,
             health_check_task: TokioMutex::new(task),
+            cache,
         }
     }
 }
 
 #[async_trait]
-impl ProxyTcpHandler for Handler {
+impl TcpOutboundHandler for Handler {
     fn name(&self) -> &str {
         super::NAME
     }
 
-    fn tcp_connect_addr(&self) -> Option<(String, u16, SocketAddr)> {
+    fn tcp_connect_addr(&self) -> Option<OutboundConnect> {
         None
     }
 
-    async fn handle<'a>(
+    async fn handle_tcp<'a>(
         &'a self,
         sess: &'a Session,
         _stream: Option<Box<dyn ProxyStream>>,
@@ -155,27 +174,68 @@ impl ProxyTcpHandler for Handler {
             }
         }
 
+        if let Some(cache) = &self.cache {
+            // Try the cached actor first if exists.
+            let cache_key = sess.destination.to_string();
+            if let Some(idx) = cache.lock().await.get(&cache_key) {
+                debug!(
+                    "failover handles tcp [{}] to cached [{}]",
+                    sess.destination,
+                    self.actors[*idx].tag()
+                );
+                // TODO Remove the entry immediately if timeout or fail?
+                match timeout(
+                    time::Duration::from_secs(self.fail_timeout as u64),
+                    (&self.actors[*idx]).handle_tcp(sess, None),
+                )
+                .await
+                {
+                    Ok(t) => match t {
+                        Ok(v) => return Ok(v),
+                        Err(_) => (),
+                    },
+                    Err(_) => (),
+                }
+            };
+        }
+
         let schedule = self.schedule.lock().await.clone();
 
-        for i in schedule {
-            if i >= self.actors.len() {
+        for (sche_idx, actor_idx) in schedule.into_iter().enumerate() {
+            if actor_idx >= self.actors.len() {
                 return Err(io::Error::new(io::ErrorKind::Other, "invalid actor index"));
             }
 
+            debug!(
+                "failover handles tcp [{}] to [{}]",
+                sess.destination,
+                self.actors[actor_idx].tag()
+            );
             match timeout(
                 time::Duration::from_secs(self.fail_timeout as u64),
-                (&self.actors[i]).handle(sess, None),
+                (&self.actors[actor_idx]).handle_tcp(sess, None),
             )
             .await
             {
                 // return before timeout
                 Ok(t) => match t {
-                    // return ok
-                    Ok(v) => return Ok(v),
-                    // return err
+                    Ok(v) => {
+                        // Only cache for fallback actors.
+                        if let Some(cache) = &self.cache {
+                            if sche_idx > 0 {
+                                let cache_key = sess.destination.to_string();
+                                trace!(
+                                    "failover inserts {} -> {} to cache",
+                                    cache_key,
+                                    self.actors[actor_idx].tag()
+                                );
+                                cache.lock().await.insert(cache_key, actor_idx);
+                            }
+                        }
+                        return Ok(v);
+                    }
                     Err(_) => continue,
                 },
-                // after timeout
                 Err(_) => continue,
             }
         }

@@ -13,7 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use url::Url;
 
 use crate::{
-    proxy::{ProxyStream, ProxyTcpHandler, SimpleStream},
+    proxy::{OutboundConnect, ProxyStream, SimpleProxyStream, TcpOutboundHandler},
     session::Session,
 };
 
@@ -94,16 +94,16 @@ pub struct Handler {
 }
 
 #[async_trait]
-impl ProxyTcpHandler for Handler {
+impl TcpOutboundHandler for Handler {
     fn name(&self) -> &str {
         super::NAME
     }
 
-    fn tcp_connect_addr(&self) -> Option<(String, u16, SocketAddr)> {
+    fn tcp_connect_addr(&self) -> Option<OutboundConnect> {
         None
     }
 
-    async fn handle<'a>(
+    async fn handle_tcp<'a>(
         &'a self,
         _sess: &'a Session,
         stream: Option<Box<dyn ProxyStream>>,
@@ -154,7 +154,7 @@ impl ProxyTcpHandler for Handler {
                     recv_stream,
                     recv_buf: BytesMut::new(),
                 };
-                Ok(Box::new(SimpleStream(h2_stream)))
+                Ok(Box::new(SimpleProxyStream(h2_stream)))
             }
             None => Err(io::Error::new(io::ErrorKind::Other, "invalid h2 input")),
         }

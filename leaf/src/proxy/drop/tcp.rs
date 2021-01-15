@@ -4,23 +4,23 @@ use std::net::SocketAddr;
 use async_trait::async_trait;
 
 use crate::{
-    proxy::{ProxyStream, ProxyTcpHandler},
+    proxy::{OutboundConnect, ProxyStream, TcpOutboundHandler},
     session::Session,
 };
 
 pub struct Handler {}
 
 #[async_trait]
-impl ProxyTcpHandler for Handler {
+impl TcpOutboundHandler for Handler {
     fn name(&self) -> &str {
         super::NAME
     }
 
-    fn tcp_connect_addr(&self) -> Option<(String, u16, SocketAddr)> {
+    fn tcp_connect_addr(&self) -> Option<OutboundConnect> {
         None
     }
 
-    async fn handle<'a>(
+    async fn handle_tcp<'a>(
         &'a self,
         _sess: &'a Session,
         _stream: Option<Box<dyn ProxyStream>>,

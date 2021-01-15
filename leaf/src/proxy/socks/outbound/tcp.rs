@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use futures::future::TryFutureExt;
 
 use crate::{
-    common::dns_client::DnsClient,
-    proxy::{ProxyStream, ProxyTcpHandler},
+    app::dns_client::DnsClient,
+    proxy::{OutboundConnect, ProxyStream, TcpOutboundHandler},
     session::{Session, SocksAddr},
 };
 
@@ -21,16 +21,20 @@ pub struct Handler {
 }
 
 #[async_trait]
-impl ProxyTcpHandler for Handler {
+impl TcpOutboundHandler for Handler {
     fn name(&self) -> &str {
         super::NAME
     }
 
-    fn tcp_connect_addr(&self) -> Option<(String, u16, SocketAddr)> {
-        Some((self.address.clone(), self.port, self.bind_addr))
+    fn tcp_connect_addr(&self) -> Option<OutboundConnect> {
+        Some(OutboundConnect::Proxy(
+            self.address.clone(),
+            self.port,
+            self.bind_addr,
+        ))
     }
 
-    async fn handle<'a>(
+    async fn handle_tcp<'a>(
         &'a self,
         sess: &'a Session,
         stream: Option<Box<dyn ProxyStream>>,

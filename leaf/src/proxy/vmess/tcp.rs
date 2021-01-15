@@ -6,8 +6,8 @@ use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 use crate::{
-    common::dns_client::DnsClient,
-    proxy::{stream::SimpleStream, ProxyStream, ProxyTcpHandler},
+    app::dns_client::DnsClient,
+    proxy::{stream::SimpleProxyStream, OutboundConnect, ProxyStream, TcpOutboundHandler},
     session::Session,
 };
 
@@ -25,16 +25,20 @@ pub struct Handler {
 }
 
 #[async_trait]
-impl ProxyTcpHandler for Handler {
+impl TcpOutboundHandler for Handler {
     fn name(&self) -> &str {
         super::NAME
     }
 
-    fn tcp_connect_addr(&self) -> Option<(String, u16, SocketAddr)> {
-        Some((self.address.clone(), self.port, self.bind_addr))
+    fn tcp_connect_addr(&self) -> Option<OutboundConnect> {
+        Some(OutboundConnect::Proxy(
+            self.address.clone(),
+            self.port,
+            self.bind_addr,
+        ))
     }
 
-    async fn handle<'a>(
+    async fn handle_tcp<'a>(
         &'a self,
         sess: &'a Session,
         stream: Option<Box<dyn ProxyStream>>,
@@ -122,6 +126,6 @@ impl ProxyTcpHandler for Handler {
             dec_size_parser,
             16, // FIXME
         );
-        Ok(Box::new(SimpleStream(stream)))
+        Ok(Box::new(SimpleProxyStream(stream)))
     }
 }

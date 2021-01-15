@@ -11,17 +11,23 @@ use trust_dns_proto::rr::{
     dns_class::DNSClass, record_data::RData, record_type::RecordType, resource::Record,
 };
 
+pub enum FakeDnsMode {
+    Include,
+    Exclude,
+}
+
 pub struct FakeDns {
     map: HashMap<u32, String>,
     cursor: u32,
     min_cursor: u32,
     max_cursor: u32,
     ttl: u32,
-    exclude_domains: Vec<String>,
+    domains: Vec<String>,
+    mode: FakeDnsMode,
 }
 
 impl FakeDns {
-    pub fn new() -> Self {
+    pub fn new(mode: FakeDnsMode) -> Self {
         let min_cursor = Self::ip_to_u32(&Ipv4Addr::new(173, 255, 0, 0));
         let max_cursor = Self::ip_to_u32(&Ipv4Addr::new(173, 255, 4, 255));
 
@@ -31,12 +37,13 @@ impl FakeDns {
             min_cursor,
             max_cursor,
             ttl: 1,
-            exclude_domains: Vec::new(),
+            domains: Vec::new(),
+            mode,
         }
     }
 
-    pub fn exclude(&mut self, domain: String) {
-        self.exclude_domains.push(domain);
+    pub fn add(&mut self, domain: String) {
+        self.domains.push(domain);
     }
 
     fn allocate_ip(&mut self, domain: &str) -> Ipv4Addr {
@@ -57,6 +64,27 @@ impl FakeDns {
         match self.map.get(&Self::ip_to_u32(ip)) {
             Some(v) => Some(v.clone()),
             None => None,
+        }
+    }
+
+    fn accept(&self, domain: &str) -> bool {
+        match self.mode {
+            FakeDnsMode::Exclude => {
+                for d in &self.domains {
+                    if domain.contains(d) || d == "*" {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            FakeDnsMode::Include => {
+                for d in &self.domains {
+                    if domain.contains(d) {
+                        return true;
+                    }
+                }
+                return false;
+            }
         }
     }
 
@@ -90,10 +118,8 @@ impl FakeDns {
             raw_name.to_ascii()
         };
 
-        for ex in &self.exclude_domains {
-            if domain.contains(ex) || ex == "*" {
-                return Err(anyhow!("domain {} excluded", domain));
-            }
+        if !self.accept(&domain) {
+            return Err(anyhow!("domain {} not accepted", domain));
         }
 
         let ip = self.allocate_ip(&domain);
@@ -144,12 +170,6 @@ impl FakeDns {
 
     fn ip_to_u32(ip: &Ipv4Addr) -> u32 {
         BigEndian::read_u32(&ip.octets())
-    }
-}
-
-impl Default for FakeDns {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

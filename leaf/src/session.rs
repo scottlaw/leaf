@@ -10,16 +10,25 @@ use bytes::BufMut;
 use log::*;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+// TODO use references
 pub struct Session {
+    /// The socket address of the remote peer of an inbound connection.
     pub source: SocketAddr,
+    /// The socket address of the local socket of an inbound connection.
+    pub local_addr: SocketAddr,
+    /// The proxy target address of a proxy connection.
     pub destination: SocksAddr,
+    /// The tag of the inbound handler this session initiated.
+    pub inbound_tag: String,
 }
 
 impl Clone for Session {
     fn clone(&self) -> Self {
         Session {
             source: self.source,
+            local_addr: self.local_addr,
             destination: self.destination.clone(),
+            inbound_tag: self.inbound_tag.clone(),
         }
     }
 }

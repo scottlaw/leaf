@@ -5,11 +5,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use sha2::{Digest, Sha224};
-use tokio::io::AsyncWriteExt;
 
 use crate::{
-    common::dns_client::DnsClient,
-    proxy::{ProxyStream, ProxyTcpHandler},
+    app::dns_client::DnsClient,
+    proxy::{BufHeadProxyStream, OutboundConnect, ProxyStream, TcpOutboundHandler},
     session::{Session, SocksAddrWireType},
 };
 
@@ -22,21 +21,25 @@ pub struct Handler {
 }
 
 #[async_trait]
-impl ProxyTcpHandler for Handler {
+impl TcpOutboundHandler for Handler {
     fn name(&self) -> &str {
         super::NAME
     }
 
-    fn tcp_connect_addr(&self) -> Option<(String, u16, SocketAddr)> {
-        Some((self.address.clone(), self.port, self.bind_addr))
+    fn tcp_connect_addr(&self) -> Option<OutboundConnect> {
+        Some(OutboundConnect::Proxy(
+            self.address.clone(),
+            self.port,
+            self.bind_addr,
+        ))
     }
 
-    async fn handle<'a>(
+    async fn handle_tcp<'a>(
         &'a self,
         sess: &'a Session,
         stream: Option<Box<dyn ProxyStream>>,
     ) -> io::Result<Box<dyn ProxyStream>> {
-        let mut stream = if let Some(stream) = stream {
+        let stream = if let Some(stream) = stream {
             stream
         } else {
             self.dial_tcp_stream(
@@ -56,7 +59,9 @@ impl ProxyTcpHandler for Handler {
         sess.destination
             .write_buf(&mut buf, SocksAddrWireType::PortLast)?;
         buf.put_slice(b"\r\n");
-        stream.write_all(&buf[..]).await?;
-        Ok(stream)
+        Ok(Box::new(BufHeadProxyStream {
+            inner: stream,
+            head: Some(buf),
+        }))
     }
 }

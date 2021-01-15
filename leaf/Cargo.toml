@@ -24,6 +24,9 @@ all-configs = [
 ]
 all-endpoints = [
     # inbounds
+    "inbound-chain",
+    "inbound-ws",
+    "inbound-trojan",
     "inbound-http",
     "inbound-socks",
     "inbound-tun",
@@ -43,6 +46,7 @@ all-endpoints = [
     "outbound-random",
     "outbound-tryall",
     "outbound-chain",
+    # "outbound-stat",
 ]
 
 # Ring-related
@@ -69,15 +73,19 @@ outbound-tls = []
 outbound-ws = ["tungstenite", "tokio-tungstenite", "url"]
 outbound-h2 = ["h2", "http", "url"]
 outbound-vless = ["uuid"]
-outbound-failover = []
+outbound-failover = ["lru_time_cache"]
 outbound-random = []
 outbound-tryall = []
 outbound-chain = []
+outbound-stat = ["warp"]
 
 # Inbounds
+inbound-trojan = ["sha2", "hex"]
 inbound-socks = []
 inbound-http = ["hyper"]
 inbound-tun = ["tun"]
+inbound-ws = ["tungstenite", "tokio-tungstenite", "url", "http"]
+inbound-chain = []
 
 [dependencies]
 # Common
@@ -114,7 +122,7 @@ memmap = "0.7.0"
 cidr = { version = "0.1", default-features = false }
 
 # DNS
-trust-dns-proto = "*"
+trust-dns-proto = "0.19"
 lru = "0.6"
 
 # Logging
@@ -169,6 +177,12 @@ sha-1 = { version = "0.9", optional = true }
 # Trojan
 sha2 = { version = "0.9", optional = true }
 hex = { version = "0.4", optional = true }
+
+# Failover
+lru_time_cache = { version = "0.11", optional = true }
+
+# Stat
+warp = { version = "0.2", optional = true }
 
 # TUN
 [target.'cfg(any(target_os = "ios", target_os = "macos", target_os = "linux"))'.dependencies]

@@ -28,6 +28,7 @@ pub struct General {
     pub dns_server: Option<Vec<String>>,
     pub dns_interface: Option<String>,
     pub always_real_ip: Option<Vec<String>>,
+    pub always_fake_ip: Option<Vec<String>>,
     pub interface: Option<String>,
     pub port: Option<u16>,
     pub socks_interface: Option<String>,
@@ -89,6 +90,9 @@ pub struct ProxyGroup {
     pub check_interval: Option<i32>,
     pub fail_timeout: Option<i32>,
     pub failover: Option<bool>,
+    pub fallback_cache: Option<bool>,
+    pub cache_size: Option<i32>,
+    pub cache_timeout: Option<i32>,
 
     // tryall
     pub delay_base: Option<i32>,
@@ -104,6 +108,9 @@ impl Default for ProxyGroup {
             check_interval: Some(300),
             fail_timeout: Some(4),
             failover: Some(true),
+            fallback_cache: Some(false),
+            cache_size: Some(256),
+            cache_timeout: Some(60),
             delay_base: Some(0),
         }
     }
@@ -243,6 +250,9 @@ pub fn from_lines(lines: Vec<io::Result<String>>) -> Result<Config> {
             }
             "always-real-ip" => {
                 general.always_real_ip = get_char_sep_slice(parts[1], ',');
+            }
+            "always-fake-ip" => {
+                general.always_fake_ip = get_char_sep_slice(parts[1], ',');
             }
             "interface" => {
                 general.interface = get_string(parts[1]);
@@ -443,6 +453,25 @@ pub fn from_lines(lines: Vec<io::Result<String>>) -> Result<Config> {
                     "failover" => {
                         group.failover = if v == "true" { Some(true) } else { Some(false) };
                     }
+                    "fallback-cache" => {
+                        group.fallback_cache = if v == "true" { Some(true) } else { Some(false) };
+                    }
+                    "cache-size" => {
+                        let i = if let Ok(i) = v.parse::<i32>() {
+                            Some(i)
+                        } else {
+                            None
+                        };
+                        group.cache_size = i;
+                    }
+                    "cache-timeout" => {
+                        let i = if let Ok(i) = v.parse::<i32>() {
+                            Some(i)
+                        } else {
+                            None
+                        };
+                        group.cache_timeout = i;
+                    }
                     "delay-base" => {
                         let i = if let Ok(i) = v.parse::<i32>() {
                             Some(i)
@@ -545,28 +574,26 @@ pub fn to_internal(conf: Config) -> Result<internal::Config> {
         if ext_general.interface.is_some() && ext_general.port.is_some() {
             let mut inbound = internal::Inbound::new();
             inbound.protocol = "http".to_string();
-            inbound.listen = ext_general.interface.as_ref().unwrap().to_string();
+            inbound.tag = "http".to_string();
+            inbound.address = ext_general.interface.as_ref().unwrap().to_string();
             inbound.port = ext_general.port.unwrap() as u32;
             inbounds.push(inbound);
         }
         if ext_general.socks_interface.is_some() && ext_general.socks_port.is_some() {
             let mut inbound = internal::Inbound::new();
             inbound.protocol = "socks".to_string();
-            inbound.listen = ext_general.socks_interface.as_ref().unwrap().to_string();
+            inbound.tag = "socks".to_string();
+            inbound.address = ext_general.socks_interface.as_ref().unwrap().to_string();
             inbound.port = ext_general.socks_port.unwrap() as u32;
-
-            let mut settings = internal::SocksInboundSettings::new();
-            settings.bind = inbound.listen.clone();
-            let settings = settings.write_to_bytes().unwrap();
-            inbound.settings = settings;
-
             inbounds.push(inbound);
         }
 
         if ext_general.tun_fd.is_some() || ext_general.tun.is_some() {
             let mut inbound = internal::Inbound::new();
             inbound.protocol = "tun".to_string();
+            inbound.tag = "tun".to_string();
             let mut settings = internal::TUNInboundSettings::new();
+
             let mut fake_dns_exclude = protobuf::RepeatedField::new();
             if let Some(ext_always_real_ip) = &ext_general.always_real_ip {
                 for item in ext_always_real_ip {
@@ -574,6 +601,16 @@ pub fn to_internal(conf: Config) -> Result<internal::Config> {
                 }
                 if fake_dns_exclude.len() > 0 {
                     settings.fake_dns_exclude = fake_dns_exclude;
+                }
+            }
+
+            let mut fake_dns_include = protobuf::RepeatedField::new();
+            if let Some(ext_always_fake_ip) = &ext_general.always_fake_ip {
+                for item in ext_always_fake_ip {
+                    fake_dns_include.push(item.clone())
+                }
+                if fake_dns_include.len() > 0 {
+                    settings.fake_dns_include = fake_dns_include;
                 }
             }
 
@@ -669,6 +706,20 @@ pub fn to_internal(conf: Config) -> Result<internal::Config> {
                     tls_outbound.settings = tls_settings;
                     tls_outbound.tag = format!("{}_tls_xxx", ext_proxy.tag.clone());
 
+                    // ws
+                    let mut ws_outbound = internal::Outbound::new();
+                    ws_outbound.protocol = "ws".to_string();
+                    ws_outbound.bind = ext_proxy.interface.clone();
+                    let mut ws_settings = internal::WebSocketOutboundSettings::new();
+                    if let Some(ext_ws_path) = &ext_proxy.ws_path {
+                        ws_settings.path = ext_ws_path.clone();
+                    } else {
+                        ws_settings.path = "/".to_string();
+                    }
+                    let ws_settings = ws_settings.write_to_bytes().unwrap();
+                    ws_outbound.settings = ws_settings;
+                    ws_outbound.tag = format!("{}_ws_xxx", ext_proxy.tag.clone());
+
                     // plain trojan
                     let mut settings = internal::TrojanOutboundSettings::new();
                     if let Some(ext_address) = &ext_proxy.address {
@@ -689,6 +740,9 @@ pub fn to_internal(conf: Config) -> Result<internal::Config> {
                     chain_outbound.tag = ext_proxy.tag.clone();
                     let mut chain_settings = internal::ChainOutboundSettings::new();
                     chain_settings.actors.push(tls_outbound.tag.clone());
+                    if ext_proxy.ws.unwrap() {
+                        chain_settings.actors.push(ws_outbound.tag.clone());
+                    }
                     chain_settings.actors.push(outbound.tag.clone());
                     let chain_settings = chain_settings.write_to_bytes().unwrap();
                     chain_outbound.settings = chain_settings;
@@ -699,6 +753,9 @@ pub fn to_internal(conf: Config) -> Result<internal::Config> {
                     // the chain outbound will be the default one to use
                     outbounds.push(chain_outbound);
                     outbounds.push(tls_outbound);
+                    if ext_proxy.ws.unwrap() {
+                        outbounds.push(ws_outbound);
+                    }
                     outbounds.push(outbound);
                 }
                 "vmess" => {
@@ -921,6 +978,21 @@ pub fn to_internal(conf: Config) -> Result<internal::Config> {
                         settings.failover = ext_failover;
                     } else {
                         settings.failover = true;
+                    }
+                    if let Some(ext_fallback_cache) = ext_proxy_group.fallback_cache {
+                        settings.fallback_cache = ext_fallback_cache;
+                    } else {
+                        settings.fallback_cache = false;
+                    }
+                    if let Some(ext_cache_size) = ext_proxy_group.cache_size {
+                        settings.cache_size = ext_cache_size as u32;
+                    } else {
+                        settings.cache_size = 256;
+                    }
+                    if let Some(ext_cache_timeout) = ext_proxy_group.cache_timeout {
+                        settings.cache_timeout = ext_cache_timeout as u32;
+                    } else {
+                        settings.cache_timeout = 60; // in minutes
                     }
                     let settings = settings.write_to_bytes().unwrap();
                     outbound.settings = settings;

@@ -6,10 +6,11 @@ use futures::TryFutureExt;
 use log::*;
 
 use crate::{
-    common::tls,
-    proxy::{ProxyStream, ProxyTcpHandler},
+    proxy::{OutboundConnect, ProxyStream, TcpOutboundHandler},
     session::Session,
 };
+
+use super::stream;
 
 pub struct Handler {
     pub server_name: String,
@@ -17,16 +18,16 @@ pub struct Handler {
 }
 
 #[async_trait]
-impl ProxyTcpHandler for Handler {
+impl TcpOutboundHandler for Handler {
     fn name(&self) -> &str {
         super::NAME
     }
 
-    fn tcp_connect_addr(&self) -> Option<(String, u16, SocketAddr)> {
+    fn tcp_connect_addr(&self) -> Option<OutboundConnect> {
         None
     }
 
-    async fn handle<'a>(
+    async fn handle_tcp<'a>(
         &'a self,
         sess: &'a Session,
         stream: Option<Box<dyn ProxyStream>>,
@@ -40,7 +41,7 @@ impl ProxyTcpHandler for Handler {
         trace!("wrapping tls with name {}", &name);
         match stream {
             Some(stream) => {
-                let tls_stream = tls::wrapper::wrap_tls(stream, &name, self.alpns.clone())
+                let tls_stream = stream::wrapper::wrap_tls(stream, &name, self.alpns.clone())
                     .map_err(|e| {
                         io::Error::new(io::ErrorKind::Other, format!("wrap tls failed: {}", e))
                     })

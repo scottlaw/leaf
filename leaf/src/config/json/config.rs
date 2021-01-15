@@ -22,8 +22,18 @@ pub struct Log {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct SocksInboundSettings {
-    pub bind: Option<String>,
+pub struct TrojanInboundSettings {
+    pub password: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct WebSocketInboundSettings {
+    pub path: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ChainInboundSettings {
+    pub actors: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -36,13 +46,15 @@ pub struct TUNInboundSettings {
     pub mtu: Option<i32>,
     #[serde(rename = "fakeDnsExclude")]
     pub fake_dns_exclude: Option<Vec<String>>,
+    #[serde(rename = "fakeDnsInclude")]
+    pub fake_dns_include: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Inbound {
     pub protocol: String,
     pub tag: Option<String>,
-    pub listen: Option<String>,
+    pub address: Option<String>,
     pub port: Option<u16>,
     pub settings: Option<Box<RawValue>>,
 }
@@ -134,6 +146,18 @@ pub struct FailOverOutboundSettings {
     #[serde(rename = "checkInterval")]
     pub check_interval: Option<u32>,
     pub failover: Option<bool>,
+    #[serde(rename = "fallbackCache")]
+    pub fallback_cache: Option<bool>,
+    #[serde(rename = "cacheSize")]
+    pub cache_size: Option<u32>,
+    #[serde(rename = "cacheTimeout")]
+    pub cache_timeout: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct StatOutboundSettings {
+    pub address: Option<String>,
+    pub port: Option<u16>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -206,10 +230,10 @@ pub fn to_internal(json: Config) -> Result<internal::Config> {
             if let Some(ext_tag) = ext_inbound.tag {
                 inbound.tag = ext_tag;
             }
-            if let Some(ext_listen) = ext_inbound.listen {
-                inbound.listen = ext_listen;
+            if let Some(ext_address) = ext_inbound.address {
+                inbound.address = ext_address;
             } else {
-                inbound.listen = "127.0.0.1".to_string();
+                inbound.address = "127.0.0.1".to_string();
             }
             if let Some(ext_port) = ext_inbound.port {
                 inbound.port = ext_port as u32;
@@ -232,6 +256,16 @@ pub fn to_internal(json: Config) -> Result<internal::Config> {
                     }
                     if fake_dns_exclude.len() > 0 {
                         settings.fake_dns_exclude = fake_dns_exclude;
+                    }
+
+                    let mut fake_dns_include = protobuf::RepeatedField::new();
+                    if let Some(ext_includes) = ext_settings.fake_dns_include {
+                        for ext_include in ext_includes {
+                            fake_dns_include.push(ext_include);
+                        }
+                    }
+                    if fake_dns_include.len() > 0 {
+                        settings.fake_dns_include = fake_dns_include;
                     }
 
                     if let Some(ext_fd) = ext_settings.fd {
@@ -264,13 +298,48 @@ pub fn to_internal(json: Config) -> Result<internal::Config> {
                     inbounds.push(inbound);
                 }
                 "socks" => {
-                    let mut settings = internal::SocksInboundSettings::new();
-                    let ext_settings: SocksInboundSettings =
+                    inbounds.push(inbound);
+                }
+                "trojan" => {
+                    let mut settings = internal::TrojanInboundSettings::new();
+                    let ext_settings: TrojanInboundSettings =
                         serde_json::from_str(ext_inbound.settings.unwrap().get()).unwrap();
-                    if let Some(ext_bind) = ext_settings.bind {
-                        settings.bind = ext_bind;
+                    if let Some(ext_password) = ext_settings.password {
+                        settings.password = ext_password;
                     } else {
-                        settings.bind = "".to_string();
+                        settings.password = "".to_string(); // FIXME warns?
+                    };
+                    let settings = settings.write_to_bytes().unwrap();
+                    inbound.settings = settings;
+                    inbounds.push(inbound);
+                }
+                "ws" => {
+                    let mut settings = internal::WebSocketInboundSettings::new();
+                    let ext_settings: WebSocketInboundSettings =
+                        serde_json::from_str(ext_inbound.settings.unwrap().get()).unwrap();
+                    match ext_settings.path {
+                        Some(ext_path) if !ext_path.is_empty() => {
+                            settings.path = ext_path;
+                        }
+                        _ => {
+                            settings.path = "/".to_string();
+                        }
+                    };
+                    let settings = settings.write_to_bytes().unwrap();
+                    inbound.settings = settings;
+                    inbounds.push(inbound);
+                }
+                "chain" => {
+                    if ext_inbound.settings.is_none() {
+                        return Err(anyhow!("invalid chain inbound settings"));
+                    }
+                    let mut settings = internal::ChainInboundSettings::new();
+                    let ext_settings: ChainInboundSettings =
+                        serde_json::from_str(ext_inbound.settings.unwrap().get()).unwrap();
+                    if let Some(ext_actors) = ext_settings.actors {
+                        for ext_actor in ext_actors {
+                            settings.actors.push(ext_actor);
+                        }
                     }
                     let settings = settings.write_to_bytes().unwrap();
                     inbound.settings = settings;
@@ -548,13 +617,28 @@ pub fn to_internal(json: Config) -> Result<internal::Config> {
                     } else {
                         settings.failover = true;
                     }
+                    if let Some(ext_fallback_cache) = ext_settings.fallback_cache {
+                        settings.fallback_cache = ext_fallback_cache;
+                    } else {
+                        settings.fallback_cache = false;
+                    }
+                    if let Some(ext_cache_size) = ext_settings.cache_size {
+                        settings.cache_size = ext_cache_size;
+                    } else {
+                        settings.cache_size = 256;
+                    }
+                    if let Some(ext_cache_timeout) = ext_settings.cache_timeout {
+                        settings.cache_timeout = ext_cache_timeout;
+                    } else {
+                        settings.cache_timeout = 60; // in minutes
+                    }
                     let settings = settings.write_to_bytes().unwrap();
                     outbound.settings = settings;
                     outbounds.push(outbound);
                 }
                 "chain" => {
                     if ext_outbound.settings.is_none() {
-                        return Err(anyhow!("invalid random chain settings"));
+                        return Err(anyhow!("invalid chain outbound settings"));
                     }
                     let mut settings = internal::ChainOutboundSettings::new();
                     let ext_settings: ChainOutboundSettings =
@@ -563,6 +647,23 @@ pub fn to_internal(json: Config) -> Result<internal::Config> {
                         for ext_actor in ext_actors {
                             settings.actors.push(ext_actor);
                         }
+                    }
+                    let settings = settings.write_to_bytes().unwrap();
+                    outbound.settings = settings;
+                    outbounds.push(outbound);
+                }
+                "stat" => {
+                    if ext_outbound.settings.is_none() {
+                        return Err(anyhow!("invalid stat outbound settings"));
+                    }
+                    let mut settings = internal::StatOutboundSettings::new();
+                    let ext_settings: StatOutboundSettings =
+                        serde_json::from_str(ext_outbound.settings.unwrap().get()).unwrap();
+                    if let Some(ext_address) = ext_settings.address {
+                        settings.address = ext_address;
+                    }
+                    if let Some(ext_port) = ext_settings.port {
+                        settings.port = ext_port as u32;
                     }
                     let settings = settings.write_to_bytes().unwrap();
                     outbound.settings = settings;
